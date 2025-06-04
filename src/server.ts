@@ -269,7 +269,7 @@ export const createMcpServer = (): McpServer => {
 		"swipe_on_screen",
 		"Swipe on the screen",
 		{
-			direction: z.enum(["up", "down"]).describe("The direction to swipe"),
+			direction: z.enum(["up", "down", "left", "right"]).describe("The direction to swipe"),
 		},
 		async ({ direction }) => {
 			requireRobot();
@@ -317,18 +317,50 @@ export const createMcpServer = (): McpServer => {
 					throw new ActionableError("Screenshot is invalid. Please try again.");
 				}
 
+				// Log dimensions for debugging
+				trace(`Screenshot: PNG dimensions: ${pngSize.width}x${pngSize.height}, Screen size: ${screenSize.width}x${screenSize.height}, Scale: ${screenSize.scale}`);
+
 				if (isImageMagickInstalled()) {
 					trace("ImageMagick is installed, resizing screenshot");
 					const image = Image.fromBuffer(screenshot);
 					const beforeSize = screenshot.length;
-					screenshot = image.resize(Math.floor(pngSize.width / screenSize.scale))
+					
+					// Calculate target width based on screen size and scale
+					// For Android, we want to preserve the aspect ratio while scaling appropriately
+					let targetWidth: number;
+					
+					if (screenSize.scale > 1) {
+						// High-density display: scale down the screenshot to logical pixels
+						targetWidth = Math.floor(pngSize.width / screenSize.scale);
+					} else {
+						// Standard density or unknown scale: use screen size as reference
+						// If PNG is much larger than screen size, scale it down proportionally
+						const widthRatio = pngSize.width / screenSize.width;
+						const heightRatio = pngSize.height / screenSize.height;
+						
+						if (widthRatio > 2 || heightRatio > 2) {
+							// Screenshot is significantly larger than logical screen size, scale it down
+							const maxRatio = Math.max(widthRatio, heightRatio);
+							targetWidth = Math.floor(pngSize.width / maxRatio);
+						} else {
+							// Keep original size if it's reasonable
+							targetWidth = pngSize.width;
+						}
+					}
+					
+					// Ensure minimum size for readability
+					targetWidth = Math.max(targetWidth, 320);
+					
+					screenshot = image.resize(targetWidth)
 						.jpeg({ quality: 75 })
 						.toBuffer();
 
 					const afterSize = screenshot.length;
-					trace(`Screenshot resized from ${beforeSize} bytes to ${afterSize} bytes`);
+					trace(`Screenshot resized from ${beforeSize} bytes to ${afterSize} bytes, target width: ${targetWidth}`);
 
 					mimeType = "image/jpeg";
+				} else {
+					trace("ImageMagick not available, returning PNG as-is");
 				}
 
 				const screenshot64 = screenshot.toString("base64");
